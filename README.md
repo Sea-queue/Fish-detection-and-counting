@@ -5,9 +5,7 @@ Fish monitoring using YOLO11 Object Detection model + BotSort Tracking technique
 
 ## 📌 Overview
 Briefly describe:
-- The purpose of the model  
-- The problem it solves  
-- The techniques/models used (e.g., YOLO, Transformer, etc.)
+- This Project focuses on river herring detection, all other type of fishes are considered as non-herring class.
 
 ---
 
