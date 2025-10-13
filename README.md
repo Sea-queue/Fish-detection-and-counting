@@ -14,6 +14,13 @@ Fish monitoring using YOLO11 Object Detection model + BotSort Tracking technique
 
 ---
 
+## 🎬 Research Demo
+<div style="display: flex; justify-content: space-between; flex-wrap: wrap;">
+  <video src="output/tracking_nemasket0_113.mp4" controls autoplay loop muted style="width: 49%; border-radius: 8px;"></video>
+  <video src="output/tracking_saco5_113.mp4" controls autoplay loop muted style="width: 49%; border-radius: 8px;"></video>
+</div>
+
+
 ## ⚙️ Installation
 
 ### Clone the repository
