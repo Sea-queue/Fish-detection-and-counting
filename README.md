@@ -15,13 +15,10 @@ Fish monitoring using YOLO11 Object Detection model + BotSort Tracking technique
 ---
 
 ## 🎬 River Herring Counting Demo
-<div style="display: flex; justify-content: space-between; flex-wrap: wrap;">
-  <video src="output/tracking_nemasket0_113.mp4" controls autoplay loop muted style="width: 49%; border-radius: 8px;"></video>
-  <video src="output/tracking_saco5_113.mp4" controls autoplay loop muted style="width: 49%; border-radius: 8px;"></video>
+<div style="display:flex;justify-content:space-between;">
+  <img src="output/tracking_nemasket0_113.gif" width="49%">
+  <img src="output/tracking_saco5_113.gif" width="49%">
 </div>
-
-[tracking_nemasket0_113.mp4](output/tracking_nemasket0_113.mp4)  
-[tracking_saco5_113.mp4](output/tracking_saco5_113.mp4)
 
 
 ## ⚙️ Installation
