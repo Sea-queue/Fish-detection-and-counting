@@ -19,6 +19,7 @@ Fish monitoring using YOLO11 Object Detection model + BotSort Tracking technique
   <video src="output/tracking_nemasket0_113.mp4" controls autoplay loop muted style="width: 49%; border-radius: 8px;"></video>
   <video src="output/tracking_saco5_113.mp4" controls autoplay loop muted style="width: 49%; border-radius: 8px;"></video>
 </div>
+
 [tracking_nemasket0_113.mp4](output/tracking_nemasket0_113.mp4)  
 [tracking_saco5_113.mp4](output/tracking_saco5_113.mp4)
 
