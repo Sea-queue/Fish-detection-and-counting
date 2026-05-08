@@ -1,0 +1,12 @@
+.DS_Store
+model/*.pt
+runs/
+herring_yolo_test/
+frames/
+roboflow_test/
+Box Labeling-Video-*.coco/
+**/__pycache__/
+*.pyc
+yolo-eval/
+test_scripts/test-videos/
+test_scripts/.DS_Store
