@@ -1,0 +1,140 @@
+# =============================================================================
+# Fish Detection & Counting — Dataset Registry
+# =============================================================================
+#
+# To add a new dataset, append an entry under `datasets:`.
+# No other files need to change.
+#
+# COCO detection datasets are converted to YOLO format automatically on first
+# use and cached in `cache_dir`.  To force re-conversion, delete the cache_dir.
+#
+# Field reference
+# ---------------
+# type:          "detection" | "counting"
+# format:        "yolo" (detection only) | "coco" (detection only) | "video" (counting only)
+#
+# --- detection / yolo ---
+# data_yaml:     path to an existing YOLO data.yaml
+# split:         which split model.val() uses (default: test)
+#
+# --- detection / coco ---
+# coco_dir:             path to the directory containing images + _annotations.coco.json
+# coco_annotation_file: annotation filename inside coco_dir (default: _annotations.coco.json)
+# category_map:         COCO category_id -> YOLO class index  (integer keys)
+# class_names:          YOLO class index -> name              (integer keys)
+# cache_dir:            where the converted YOLO dataset is written / cached
+# split:                which split model.val() uses (default: test)
+#
+# --- counting / video ---
+# video_path:     path to the input video file
+# exit_margin:    fraction of frame width used as exit zone (default: 0.35)
+# count_conf:     min confidence for counting a detection    (default: 0.70)
+# majority_ratio: min fraction of detections for class vote  (default: 0.70)
+#
+# All paths are relative to the project root (where eval.py lives).
+# =============================================================================
+
+datasets:
+
+  # ---------------------------------------------------------------------------
+  # Detection — Roboflow dataset (already in YOLO format, 1720 test images)
+  # ---------------------------------------------------------------------------
+  roboflow:
+    type: detection
+    format: yolo
+    data_yaml: roboflow_test/roboflow_yolo_test/data.yaml
+    split: test
+
+  # ---------------------------------------------------------------------------
+  # Detection — Herring HARD labeled frames (COCO format, 76 images)
+  # ---------------------------------------------------------------------------
+  herring_hard:
+    type: detection
+    format: coco
+    coco_dir: "Box Labeling-Video- HERRING-HARD- Job 3.coco/train"
+    coco_annotation_file: _annotations.coco.json
+    category_map:
+      1: 0                  # COCO River-Herring (id=1) -> YOLO class 0
+    class_names:
+      0: Herring
+      1: Non-Herring
+    cache_dir: herring_yolo_test/hard
+    split: test
+
+  # ---------------------------------------------------------------------------
+  # Detection — Herring EASY labeled frames (COCO format, 89 images)
+  # ---------------------------------------------------------------------------
+  herring_easy:
+    type: detection
+    format: coco
+    coco_dir: "Box Labeling-Video-HERRING-EASY- Job 10.coco/train"
+    coco_annotation_file: _annotations.coco.json
+    category_map:
+      1: 0                  # COCO River-Herring (id=1) -> YOLO class 0
+    class_names:
+      0: Herring
+      1: Non-Herring
+    cache_dir: herring_yolo_test/easy
+    split: test
+
+  # ---------------------------------------------------------------------------
+  # Counting — test videos
+  # ---------------------------------------------------------------------------
+  count5:
+    type: counting
+    format: video
+    video_path: test_scripts/test-videos/count5.mp4
+    min_track_len: 2
+
+  nemasket_normal:
+    type: counting
+    format: video
+    video_path: "test_scripts/test-videos/nemasket_normal 2.mp4"
+
+  nemasket_huge:
+    type: counting
+    format: video
+    video_path: "test_scripts/test-videos/nemasket_huge 4- 2.mp4"
+
+  nemasket_extra_huge:
+    type: counting
+    format: video
+    video_path: "test_scripts/test-videos/nemasket_exta_huge 4.mp4"
+
+# =============================================================================
+# To add a new COCO detection dataset:
+#
+#   my_new_dataset:
+#     type: detection
+#     format: coco
+#     coco_dir: "My New Dataset.coco/train"
+#     category_map:
+#       1: 0
+#     class_names:
+#       0: Herring
+#       1: Non-Herring
+#     cache_dir: my_new_dataset_yolo
+#
+# Then run:
+#   python eval.py detect --dataset my_new_dataset --weights model/train113.pt
+#
+# To add a new video counting dataset:
+#
+#   my_new_video:
+#     type: counting
+#     format: video
+#     video_path: test_scripts/test-videos/my_clip.mp4
+#
+# Then run:
+#   python eval.py count --dataset my_new_video --weights model/train113.pt
+# =============================================================================
+
+  non_herring_easy:
+    type: counting
+    format: video
+    video_path: test_scripts/test-videos/test_dataset.mp4
+  
+    # Tuned for this video: short tracks, high class-flickering
+    # count_conf: 0.50
+    # majority_ratio: 0.55
+    # min_track_len: 5
