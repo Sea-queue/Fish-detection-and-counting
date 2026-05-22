@@ -37,6 +37,7 @@ class RunConfig:
     count_conf: float = 0.70
     majority_ratio: float = 0.70
     min_track_len: int = 10
+    grayscale: bool = False
     no_display: bool = False
 
     # ------------------------------------------------------------------ #
@@ -89,6 +90,9 @@ class RunConfig:
             ),
             min_track_len=_pick(
                 getattr(args, "min_track_len", None), "min_track_len", 10
+            ),
+            grayscale=bool(
+                getattr(args, "grayscale", False) or dataset_entry.get("grayscale", False)
             ),
             no_display=getattr(args, "no_display", False),
         )

@@ -132,7 +132,11 @@ datasets:
   non_herring_easy:
     type: counting
     format: video
-    video_path: test_scripts/test-videos/test_dataset.mp4
+    video_path: test_scripts/test-videos/non-herring-easy.mp4
+    grayscale: true
+    # count_conf: 0.50
+    # majority_ratio: 0.55
+    # min_track_len: 5          
   
     # Tuned for this video: short tracks, high class-flickering
     # count_conf: 0.50
