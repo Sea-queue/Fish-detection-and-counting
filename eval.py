@@ -136,6 +136,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Min high-conf frames a track needs before it can be counted (default: 10)",
     )
     count_p.add_argument(
+        "--grayscale", action="store_true",
+        help="Convert each frame to grayscale before inference (helps on overexposed/bright video)",
+    )
+    count_p.add_argument(
         "--no-display", action="store_true",
         help="Suppress the OpenCV preview window (useful for headless runs)",
     )
