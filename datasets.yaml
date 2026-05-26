@@ -85,8 +85,8 @@ datasets:
     format: video
     video_path: test_scripts/test-videos/count5.mp4
     min_track_len: 2
-    zone_entry_margin: 0.35
-    zone_exit_margin: 0.35
+    zone_entry_margin: 0.20
+    zone_exit_margin: 0.10
     zone_min_track_length: 2
 
   nemasket_normal:

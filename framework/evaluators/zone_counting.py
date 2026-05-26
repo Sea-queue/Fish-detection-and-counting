@@ -264,4 +264,26 @@ class ZoneCountingEvaluator(Evaluator):
         csv_file.close()
         cv2.destroyAllWindows()
 
+        # ── Diagnostic summary ──
+        total_tracks = len(tracks) + len(counted_ids)
+        middle_entry = sum(1 for t in tracks.values() if t["first_side"] == "middle")
+        same_side = sum(1 for t in tracks.values()
+                        if t["first_side"] == t["last_side"]
+                        and t["first_side"] != "middle"
+                        and t not in counted_ids)
+        too_short = sum(1 for t in tracks.values()
+                        if (t["last_frame"] - t["first_frame"]) < min_track_length)
+        no_exit = sum(1 for t in tracks.values()
+                      if t["first_side"] != t["last_side"]
+                      and t["first_side"] != "middle"
+                      and not _is_valid_traversal(t, width, exit_margin, min_track_length))
+
+        print(f"\n  ── Zone Diagnostics ──")
+        print(f"  Total unique tracks seen: {total_tracks}")
+        print(f"  Counted (valid traversal): {len(counted_ids)}")
+        print(f"  Rejected — entered from middle: {middle_entry}")
+        print(f"  Rejected — exited same side as entry: {same_side}")
+        print(f"  Rejected — track too short (<{min_track_length} frames): {too_short}")
+        print(f"  Rejected — crossed sides but didn't reach exit boundary: {no_exit}")
+
         return dict(fish_counts)

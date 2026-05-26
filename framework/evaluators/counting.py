@@ -152,6 +152,7 @@ class CountingEvaluator(Evaluator):
                 conf=self.config.conf,
                 max_det=self.config.max_det,
                 device=self.config.device,
+                verbose=False,
             )
 
             # Initialize class name map from model on first frame
