@@ -39,6 +39,7 @@ class RunConfig:
     min_track_len: int = 10
     grayscale: bool = False
     no_display: bool = False
+    count_algorithm: str = "original"  # "original" | "zone" | "stitch" | "all"
 
     # ------------------------------------------------------------------ #
     @staticmethod
@@ -95,4 +96,5 @@ class RunConfig:
                 getattr(args, "grayscale", False) or dataset_entry.get("grayscale", False)
             ),
             no_display=getattr(args, "no_display", False),
+            count_algorithm=getattr(args, "algorithm", "original") or "original",
         )
