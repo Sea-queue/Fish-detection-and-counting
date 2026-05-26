@@ -141,6 +141,10 @@ class CountingEvaluator(Evaluator):
                 break
             frame_id += 1
 
+            # Grayscale mode: strip colour info to help model on overexposed/bright video
+            if self.config.grayscale:
+                frame = cv2.cvtColor(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR)
+
             results = model.track(
                 frame,
                 persist=True,

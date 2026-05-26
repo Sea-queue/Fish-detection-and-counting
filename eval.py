@@ -43,7 +43,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from framework.registry import DatasetRegistry
 from framework.config import RunConfig
-from framework.evaluators import DetectionEvaluator, CountingEvaluator
+from framework.evaluators import (
+    DetectionEvaluator,
+    CountingEvaluator,
+    ZoneCountingEvaluator,
+    StitchCountingEvaluator,
+)
 
 DATASETS_YAML = Path(__file__).parent / "datasets.yaml"
 DEFAULT_OUTPUT = "runs/eval"
@@ -136,8 +141,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Min high-conf frames a track needs before it can be counted (default: 10)",
     )
     count_p.add_argument(
+        "--grayscale", action="store_true",
+        help="Convert each frame to grayscale before inference (helps on overexposed/bright video)",
+    )
+    count_p.add_argument(
         "--no-display", action="store_true",
         help="Suppress the OpenCV preview window (useful for headless runs)",
+    )
+    count_p.add_argument(
+        "--algorithm", "-a",
+        choices=["original", "zone", "stitch", "all"],
+        default="original",
+        help="Counting algorithm: original (exit-margin), zone (zone traversal), "
+             "stitch (zone + track stitching), or all (run all three for comparison)",
     )
 
     return parser
@@ -240,10 +256,25 @@ def main():
 
         if args.subcommand == "detect":
             evaluator = DetectionEvaluator(config, registry)
+            evaluator.evaluate()
         else:
-            evaluator = CountingEvaluator(config, registry)
+            # Counting: dispatch based on --algorithm
+            algo = config.count_algorithm
+            algorithms = (
+                ["original", "zone", "stitch"] if algo == "all"
+                else [algo]
+            )
 
-        evaluator.evaluate()
+            ALGO_MAP = {
+                "original": CountingEvaluator,
+                "zone": ZoneCountingEvaluator,
+                "stitch": StitchCountingEvaluator,
+            }
+
+            for alg in algorithms:
+                print(f"\n  Algorithm: {alg}")
+                evaluator = ALGO_MAP[alg](config, registry)
+                evaluator.evaluate()
 
 
 if __name__ == "__main__":
