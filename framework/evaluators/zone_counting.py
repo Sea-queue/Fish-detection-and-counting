@@ -267,15 +267,16 @@ class ZoneCountingEvaluator(Evaluator):
         # ── Diagnostic summary ──
         total_tracks = len(tracks) + len(counted_ids)
         middle_entry = sum(1 for t in tracks.values() if t["first_side"] == "middle")
-        same_side = sum(1 for t in tracks.values()
+        same_side = sum(1 for tid, t in tracks.items()
                         if t["first_side"] == t["last_side"]
                         and t["first_side"] != "middle"
-                        and t not in counted_ids)
+                        and tid not in counted_ids)
         too_short = sum(1 for t in tracks.values()
                         if (t["last_frame"] - t["first_frame"]) < min_track_length)
-        no_exit = sum(1 for t in tracks.values()
+        no_exit = sum(1 for tid, t in tracks.items()
                       if t["first_side"] != t["last_side"]
                       and t["first_side"] != "middle"
+                      and tid not in counted_ids
                       and not _is_valid_traversal(t, width, exit_margin, min_track_length))
 
         print(f"\n  ── Zone Diagnostics ──")
