@@ -30,11 +30,7 @@ from .base import Evaluator
 from ..reporting.summary import MetricsSummary
 
 
-# ── Zone algorithm constants ─────────────────────────────────────────────────
-ENTRY_MARGIN = 0.20
-EXIT_MARGIN = 0.10
-ABSENT_THRESHOLD = 5
-MIN_TRACK_LENGTH = 5
+# ── Zone algorithm defaults (overridden by config) ──────────────────────────
 
 # ── Stitching parameters ─────────────────────────────────────────────────────
 REID_MAX_GAP = 90
@@ -50,24 +46,24 @@ NOISE_MAX_LEN = 2
 NOISE_GC_AFTER = 10
 
 
-def _get_zone(cx: float, frame_width: int, margin_ratio: float = ENTRY_MARGIN) -> str:
-    if cx < frame_width * margin_ratio:
+def _get_zone(cx: float, frame_width: int, entry_margin: float) -> str:
+    if cx < frame_width * entry_margin:
         return "left"
-    elif cx > frame_width * (1 - margin_ratio):
+    elif cx > frame_width * (1 - entry_margin):
         return "right"
     return "middle"
 
 
-def _is_valid_traversal(track: dict, frame_width: int) -> bool:
+def _is_valid_traversal(track: dict, frame_width: int, exit_margin: float, min_track_length: int) -> bool:
     track_length = track["last_frame"] - track["first_frame"]
-    if track_length < MIN_TRACK_LENGTH:
+    if track_length < min_track_length:
         return False
     first_side = track["first_side"]
     last_side = track["last_side"]
     final_x = track["positions"][-1][0]
-    if first_side == "left" and last_side == "right" and final_x > frame_width * (1 - EXIT_MARGIN):
+    if first_side == "left" and last_side == "right" and final_x > frame_width * (1 - exit_margin):
         return True
-    if first_side == "right" and last_side == "left" and final_x < frame_width * EXIT_MARGIN:
+    if first_side == "right" and last_side == "left" and final_x < frame_width * exit_margin:
         return True
     return False
 
@@ -235,6 +231,15 @@ class StitchCountingEvaluator(Evaluator):
             "center_x", "center_y", "status", "track_info",
         ])
 
+        # ── Read margins from config ──
+        entry_margin = self.config.zone_entry_margin
+        exit_margin = self.config.zone_exit_margin
+        absent_threshold = self.config.zone_absent_threshold
+        min_track_length = self.config.zone_min_track_length
+
+        print(f"  Stitch params: entry_margin={entry_margin}, exit_margin={exit_margin}, "
+              f"absent_threshold={absent_threshold}, min_track_length={min_track_length}")
+
         # ── Tracking state ──
         tracks: dict[int, dict] = {}
         counted_ids: set[int] = set()
@@ -273,7 +278,7 @@ class StitchCountingEvaluator(Evaluator):
 
                 for (x_c, y_c, w, h), raw_tid, conf, cid in zip(xywh, ids, confidences, class_ids):
                     cname = model.names[cid]
-                    current_side = _get_zone(x_c, width)
+                    current_side = _get_zone(x_c, width, entry_margin)
                     tid = id_remap.get(raw_tid, raw_tid)
 
                     if tid not in tracks:
@@ -321,7 +326,7 @@ class StitchCountingEvaluator(Evaluator):
                                 (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, box_color, 2)
 
                     # Real-time counting check
-                    if tid not in counted_ids and _is_valid_traversal(track, width):
+                    if tid not in counted_ids and _is_valid_traversal(track, width, exit_margin, min_track_length):
                         final_class = _decide_track_class(track["class_history"])
                         fish_counts[final_class] += 1
                         counted_ids.add(tid)
@@ -339,7 +344,7 @@ class StitchCountingEvaluator(Evaluator):
             for missing_tid, track in tracks.items():
                 if missing_tid not in current_frame_ids and missing_tid not in counted_ids:
                     track["absent_frames"] += 1
-                    if track["absent_frames"] >= ABSENT_THRESHOLD:
+                    if track["absent_frames"] >= absent_threshold:
                         track["status"] = "missing"
                     if (len(track["positions"]) <= NOISE_MAX_LEN
                             and track["absent_frames"] >= NOISE_GC_AFTER):
@@ -354,8 +359,8 @@ class StitchCountingEvaluator(Evaluator):
                         del id_remap[raw]
 
             # Draw zone lines + counts
-            left_line = int(width * ENTRY_MARGIN)
-            right_line = int(width * (1 - ENTRY_MARGIN))
+            left_line = int(width * entry_margin)
+            right_line = int(width * (1 - entry_margin))
             cv2.line(annotated_frame, (left_line, 0), (left_line, height), (255, 255, 0), 2)
             cv2.line(annotated_frame, (right_line, 0), (right_line, height), (255, 255, 0), 2)
 

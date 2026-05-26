@@ -41,6 +41,12 @@ class RunConfig:
     no_display: bool = False
     count_algorithm: str = "original"  # "original" | "zone" | "stitch" | "all"
 
+    # --- zone/stitch algorithm-specific (does NOT affect original) ---
+    zone_entry_margin: float = 0.20
+    zone_exit_margin: float = 0.10
+    zone_absent_threshold: int = 5
+    zone_min_track_length: int = 5
+
     # ------------------------------------------------------------------ #
     @staticmethod
     def from_cli(args, dataset_entry: dict) -> "RunConfig":
@@ -97,4 +103,8 @@ class RunConfig:
             ),
             no_display=getattr(args, "no_display", False),
             count_algorithm=getattr(args, "algorithm", "original") or "original",
+            zone_entry_margin=float(dataset_entry.get("zone_entry_margin", 0.20)),
+            zone_exit_margin=float(dataset_entry.get("zone_exit_margin", 0.10)),
+            zone_absent_threshold=int(dataset_entry.get("zone_absent_threshold", 5)),
+            zone_min_track_length=int(dataset_entry.get("zone_min_track_length", 5)),
         )
