@@ -9,11 +9,8 @@ Algorithm (from yolo11_prediction.ipynb):
   • ADDS noise garbage collection: short tracks (<=2 detections) that have
     been absent for 10+ frames are deleted.
 
-This is the most sophisticated counting algorithm — it reduces double-counting
-caused by tracker ID switches mid-traversal.
-
 Outputs per (dataset, model) pair:
-  - Annotated .mp4 with bounding boxes, zone lines, stitch info, and live count overlay
+  - Annotated .mp4 with bounding boxes, zone lines, stitch info, ID lists, and live count overlay
   - .csv with per-frame tracking details including stitch remapping
   - Entry in the run's _summary/ JSON + CSV
 """
@@ -22,15 +19,15 @@ from __future__ import annotations
 from collections import defaultdict, Counter
 from pathlib import Path
 
+import csv
 import cv2
-import numpy as np
 from ultralytics import YOLO
 
 from .base import Evaluator
 from ..reporting.summary import MetricsSummary
 
-
-# ── Zone algorithm defaults (overridden by config) ──────────────────────────
+# Path to custom tracker config (relative to project root)
+TRACKER_CONFIG = "my_botsort.yaml"
 
 # ── Stitching parameters ─────────────────────────────────────────────────────
 REID_MAX_GAP = 90
@@ -110,7 +107,7 @@ def _try_stitch(
         dx = nx - ox
 
         if len(t["positions"]) >= REID_MIN_OLD_LEN:
-            vx, vy = _estimate_velocity(t["positions"])
+            vx, _ = _estimate_velocity(t["positions"])
             if vx == 0 or vx * dx <= 0:
                 continue
             predicted_x = ox + vx * gap
@@ -145,6 +142,21 @@ def _merge_tracks(old_tid: int, new_tid: int, tracks: dict, id_remap: dict):
         old["status"] = "tracking"
     del tracks[new_tid]
     id_remap[new_tid] = old_tid
+
+
+def _draw_id_list(frame, label: str, id_list, x: int, y_start: int,
+                  color: tuple, max_per_line: int = 20, scale: float = 0.5) -> int:
+    """Draw a labeled list of IDs on the frame. Returns the next y position."""
+    y = y_start
+    for i in range(0, max(1, len(id_list)), max_per_line):
+        chunk = ", ".join(map(str, sorted(id_list)[i:i + max_per_line]))
+        if i == 0:
+            text = f"{label}: {chunk}" if chunk else f"{label}: (none)"
+        else:
+            text = chunk
+        cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1)
+        y += int(22 * scale / 0.5)
+    return y + 10
 
 
 class StitchCountingEvaluator(Evaluator):
@@ -223,7 +235,6 @@ class StitchCountingEvaluator(Evaluator):
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         vid_writer = cv2.VideoWriter(str(out_video_path), fourcc, fps, (width, height))
 
-        import csv
         csv_file = open(out_csv_path, "w", newline="")
         csv_writer = csv.writer(csv_file)
         csv_writer.writerow([
@@ -236,6 +247,10 @@ class StitchCountingEvaluator(Evaluator):
         exit_margin = self.config.zone_exit_margin
         absent_threshold = self.config.zone_absent_threshold
         min_track_length = self.config.zone_min_track_length
+
+        # Scale text size based on resolution
+        font_scale = max(0.35, min(0.6, width / 1280))
+        count_scale = max(0.5, min(0.8, width / 960))
 
         print(f"  Stitch params: entry_margin={entry_margin}, exit_margin={exit_margin}, "
               f"absent_threshold={absent_threshold}, min_track_length={min_track_length}")
@@ -260,6 +275,7 @@ class StitchCountingEvaluator(Evaluator):
 
             results = model.track(
                 frame, persist=True,
+                tracker=TRACKER_CONFIG,
                 imgsz=self.config.imgsz,
                 conf=self.config.conf,
                 max_det=self.config.max_det,
@@ -318,12 +334,13 @@ class StitchCountingEvaluator(Evaluator):
                     x2, y2 = int(x_c + w / 2), int(y_c + h / 2)
                     cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), box_color, 2)
 
+                    # Show stitch info in label (matching notebook)
                     if raw_tid != tid:
                         label = f"ID:{tid}(<-{raw_tid}) {cname} {conf:.2f}"
                     else:
                         label = f"ID:{tid} {cname} {conf:.2f}"
                     cv2.putText(annotated_frame, label,
-                                (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, box_color, 2)
+                                (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, font_scale, box_color, 1)
 
                     # Real-time counting check
                     if tid not in counted_ids and _is_valid_traversal(track, width, exit_margin, min_track_length):
@@ -332,11 +349,17 @@ class StitchCountingEvaluator(Evaluator):
                         counted_ids.add(tid)
                         track["status"] = f"counted_{final_class}"
 
-                    # CSV row
+                    # CSV row (full track_info like notebook)
+                    track_info = (
+                        f"first_frame={track['first_frame']} "
+                        f"last_frame={track['last_frame']} "
+                        f"first_side={track['first_side']} "
+                        f"last_side={track['last_side']} "
+                        f"absent_frames={track['absent_frames']}"
+                    )
                     csv_writer.writerow([
                         frame_id, tid, raw_tid, cname, f"{conf:.3f}",
-                        f"{x_c:.2f}", f"{y_c:.2f}", track["status"],
-                        f"first_side={track['first_side']} last_side={track['last_side']}",
+                        f"{x_c:.2f}", f"{y_c:.2f}", track["status"], track_info,
                     ])
 
             # Update absent counters + noise GC
@@ -358,18 +381,42 @@ class StitchCountingEvaluator(Evaluator):
                     if canonical in stale_set or raw in stale_set:
                         del id_remap[raw]
 
-            # Draw zone lines + counts
+            # ── Draw zone boundaries ──
             left_line = int(width * entry_margin)
             right_line = int(width * (1 - entry_margin))
             cv2.line(annotated_frame, (left_line, 0), (left_line, height), (255, 255, 0), 2)
             cv2.line(annotated_frame, (right_line, 0), (right_line, height), (255, 255, 0), 2)
 
+            # ── Draw ID lists (top-left, matching notebook) ──
+            y_pos = _draw_id_list(annotated_frame, "Counted IDs", counted_ids,
+                                  10, 30, (0, 255, 255), scale=font_scale)
+
+            entered_list = [
+                tid for tid in tracks
+                if tracks[tid]["status"] == "tracking"
+                and len(tracks[tid]["positions"]) >= min_track_length
+            ]
+            y_pos = _draw_id_list(annotated_frame, "Entered IDs", entered_list,
+                                  10, y_pos, (255, 255, 0), scale=font_scale)
+
+            missing_list = [
+                tid for tid in tracks
+                if tracks[tid]["status"] == "missing"
+                and len(tracks[tid]["positions"]) >= min_track_length
+            ]
+            _draw_id_list(annotated_frame, "Missing IDs", missing_list,
+                          10, y_pos, (0, 0, 255), scale=font_scale)
+
+            # ── Draw counts (top-right, adaptive positioning) ──
             herring_count = fish_counts.get("Herring", 0)
             non_herring_count = sum(c for n, c in fish_counts.items() if n != "Herring")
+            count_x = max(10, width - int(300 * count_scale / 0.8))
             cv2.putText(annotated_frame, f"Herring: {herring_count} | Frame: {frame_id}",
-                        (width - 350, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-            cv2.putText(annotated_frame, f"Non-herring: {non_herring_count} | Stitches: {total_stitches}",
-                        (width - 350, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                        (count_x, 30), cv2.FONT_HERSHEY_SIMPLEX, count_scale, (0, 255, 0), 2)
+            cv2.putText(annotated_frame, f"Non-herring: {non_herring_count}",
+                        (count_x, 60), cv2.FONT_HERSHEY_SIMPLEX, count_scale, (0, 255, 0), 2)
+            cv2.putText(annotated_frame, f"Stitches: {total_stitches}",
+                        (count_x, 90), cv2.FONT_HERSHEY_SIMPLEX, count_scale, (0, 255, 0), 2)
 
             vid_writer.write(annotated_frame)
 

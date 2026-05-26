@@ -2,7 +2,7 @@
 ZoneCountingEvaluator — zone-based traversal counting WITHOUT track stitching.
 
 Algorithm (from without_tracking_prediction.ipynb):
-  • Each frame: run model.track() with BotSort; collect all detections.
+  • Each frame: run model.track() with BotSort (my_botsort.yaml); collect all detections.
   • Zone classification: each detection's x-center is classified as
     "left" / "middle" / "right" based on ENTRY_MARGIN.
   • Valid traversal: a track that entered from one side (left/right) and
@@ -12,7 +12,7 @@ Algorithm (from without_tracking_prediction.ipynb):
     consecutive frames without detection.
 
 Outputs per (dataset, model) pair:
-  - Annotated .mp4 with bounding boxes, zone lines, and live count overlay
+  - Annotated .mp4 with bounding boxes, zone lines, ID lists, and live count overlay
   - .csv with per-frame tracking details
   - Entry in the run's _summary/ JSON + CSV
 """
@@ -21,11 +21,15 @@ from __future__ import annotations
 from collections import defaultdict, Counter
 from pathlib import Path
 
+import csv
 import cv2
 from ultralytics import YOLO
 
 from .base import Evaluator
 from ..reporting.summary import MetricsSummary
+
+# Path to custom tracker config (relative to project root)
+TRACKER_CONFIG = "my_botsort.yaml"
 
 
 def _get_zone(cx: float, frame_width: int, entry_margin: float) -> str:
@@ -52,6 +56,21 @@ def _is_valid_traversal(track: dict, frame_width: int, exit_margin: float, min_t
 
 def _decide_track_class(class_history: list[str]) -> str:
     return Counter(class_history).most_common(1)[0][0]
+
+
+def _draw_id_list(frame, label: str, id_list, x: int, y_start: int,
+                  color: tuple, max_per_line: int = 20, scale: float = 0.5) -> int:
+    """Draw a labeled list of IDs on the frame. Returns the next y position."""
+    y = y_start
+    for i in range(0, max(1, len(id_list)), max_per_line):
+        chunk = ", ".join(map(str, sorted(id_list)[i:i + max_per_line]))
+        if i == 0:
+            text = f"{label}: {chunk}" if chunk else f"{label}: (none)"
+        else:
+            text = chunk
+        cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1)
+        y += int(22 * scale / 0.5)
+    return y + 10
 
 
 class ZoneCountingEvaluator(Evaluator):
@@ -125,11 +144,10 @@ class ZoneCountingEvaluator(Evaluator):
         print(f"  Resolution: {width}x{height}, FPS: {fps:.1f}, Frames: {total_frames}")
 
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        writer = cv2.VideoWriter(str(out_video_path), fourcc, fps, (width, height))
+        vid_writer = cv2.VideoWriter(str(out_video_path), fourcc, fps, (width, height))
 
-        # CSV header
+        # CSV
         csv_file = open(out_csv_path, "w", newline="")
-        import csv
         csv_writer = csv.writer(csv_file)
         csv_writer.writerow([
             "frame_id", "track_id", "class_name", "confidence",
@@ -141,6 +159,10 @@ class ZoneCountingEvaluator(Evaluator):
         exit_margin = self.config.zone_exit_margin
         absent_threshold = self.config.zone_absent_threshold
         min_track_length = self.config.zone_min_track_length
+
+        # Scale text size based on resolution
+        font_scale = max(0.35, min(0.6, width / 1280))
+        count_scale = max(0.5, min(0.8, width / 960))
 
         print(f"  Zone params: entry_margin={entry_margin}, exit_margin={exit_margin}, "
               f"absent_threshold={absent_threshold}, min_track_length={min_track_length}")
@@ -163,6 +185,7 @@ class ZoneCountingEvaluator(Evaluator):
 
             results = model.track(
                 frame, persist=True,
+                tracker=TRACKER_CONFIG,
                 imgsz=self.config.imgsz,
                 conf=self.config.conf,
                 max_det=self.config.max_det,
@@ -213,7 +236,7 @@ class ZoneCountingEvaluator(Evaluator):
                     x2, y2 = int(x_c + w / 2), int(y_c + h / 2)
                     cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), box_color, 2)
                     cv2.putText(annotated_frame, f"ID:{tid} {cname} {conf:.2f}",
-                                (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, box_color, 2)
+                                (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, font_scale, box_color, 1)
 
                     # Real-time counting check
                     if tid not in counted_ids and _is_valid_traversal(track, width, exit_margin, min_track_length):
@@ -222,11 +245,17 @@ class ZoneCountingEvaluator(Evaluator):
                         counted_ids.add(tid)
                         track["status"] = f"counted_{final_class}"
 
-                    # CSV row
+                    # CSV row (full track_info like notebook)
+                    track_info = (
+                        f"first_frame={track['first_frame']} "
+                        f"last_frame={track['last_frame']} "
+                        f"first_side={track['first_side']} "
+                        f"last_side={track['last_side']} "
+                        f"absent_frames={track['absent_frames']}"
+                    )
                     csv_writer.writerow([
                         frame_id, tid, cname, f"{conf:.3f}",
-                        f"{x_c:.2f}", f"{y_c:.2f}", track["status"],
-                        f"first_side={track['first_side']} last_side={track['last_side']}",
+                        f"{x_c:.2f}", f"{y_c:.2f}", track["status"], track_info,
                     ])
 
             # Update absent counters
@@ -236,20 +265,42 @@ class ZoneCountingEvaluator(Evaluator):
                     if track["absent_frames"] >= absent_threshold:
                         track["status"] = "missing"
 
-            # Draw zone lines + counts
+            # ── Draw zone boundaries ──
             left_line = int(width * entry_margin)
             right_line = int(width * (1 - entry_margin))
             cv2.line(annotated_frame, (left_line, 0), (left_line, height), (255, 255, 0), 2)
             cv2.line(annotated_frame, (right_line, 0), (right_line, height), (255, 255, 0), 2)
 
+            # ── Draw ID lists (top-left, matching notebook) ──
+            y_pos = _draw_id_list(annotated_frame, "Counted IDs", counted_ids,
+                                  10, 30, (0, 255, 255), scale=font_scale)
+
+            entered_list = [
+                tid for tid in tracks
+                if tracks[tid]["status"] == "tracking"
+                and len(tracks[tid]["positions"]) >= min_track_length
+            ]
+            y_pos = _draw_id_list(annotated_frame, "Entered IDs", entered_list,
+                                  10, y_pos, (255, 255, 0), scale=font_scale)
+
+            missing_list = [
+                tid for tid in tracks
+                if tracks[tid]["status"] == "missing"
+                and len(tracks[tid]["positions"]) >= min_track_length
+            ]
+            _draw_id_list(annotated_frame, "Missing IDs", missing_list,
+                          10, y_pos, (0, 0, 255), scale=font_scale)
+
+            # ── Draw counts (top-right, adaptive positioning) ──
             herring_count = fish_counts.get("Herring", 0)
             non_herring_count = sum(c for n, c in fish_counts.items() if n != "Herring")
+            count_x = max(10, width - int(300 * count_scale / 0.8))
             cv2.putText(annotated_frame, f"Herring: {herring_count} | Frame: {frame_id}",
-                        (width - 350, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                        (count_x, 30), cv2.FONT_HERSHEY_SIMPLEX, count_scale, (0, 255, 0), 2)
             cv2.putText(annotated_frame, f"Non-herring: {non_herring_count}",
-                        (width - 350, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                        (count_x, 60), cv2.FONT_HERSHEY_SIMPLEX, count_scale, (0, 255, 0), 2)
 
-            writer.write(annotated_frame)
+            vid_writer.write(annotated_frame)
 
             if frame_id % 100 == 0:
                 print(f"  Frame {frame_id}/{total_frames}  | Herring: {herring_count} | Non-herring: {non_herring_count}")
@@ -260,7 +311,7 @@ class ZoneCountingEvaluator(Evaluator):
                     break
 
         cap.release()
-        writer.release()
+        vid_writer.release()
         csv_file.close()
         cv2.destroyAllWindows()
 
