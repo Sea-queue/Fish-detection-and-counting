@@ -36,4 +36,22 @@ from ultralytics import YOLO
 model = YOLO("path_to_the_weights")  # load a custom model
 ```
 
+---
+
+## Testing & Evaluation
+
+The project includes an evaluation framework that benchmarks three counting algorithms (original, zone-based, and stitch/ReID) across multiple test datasets.
+
+For detailed testing instructions, dataset descriptions, CLI options, HPC setup, and diagnostic output — see **[test_scripts/TESTING.md](test_scripts/TESTING.md)**.
+
+Quick start:
+```bash
+# Run all 3 counting algorithms on all test videos
+python eval.py count \
+    -d count5 nemasket_normal nemasket_huge nemasket_extra_huge non_herring_easy \
+    -w model/train113_weights.pt \
+    --algorithm all \
+    --no-display \
+    --device cuda
+```
 

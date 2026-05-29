@@ -84,7 +84,6 @@ datasets:
     type: counting
     format: video
     video_path: test_scripts/test-videos/count5.mp4
-    min_track_len: 2
 
   nemasket_normal:
     type: counting

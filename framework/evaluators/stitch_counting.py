@@ -9,11 +9,8 @@ Algorithm (from yolo11_prediction.ipynb):
   • ADDS noise garbage collection: short tracks (<=2 detections) that have
     been absent for 10+ frames are deleted.
 
-This is the most sophisticated counting algorithm — it reduces double-counting
-caused by tracker ID switches mid-traversal.
-
 Outputs per (dataset, model) pair:
-  - Annotated .mp4 with bounding boxes, zone lines, stitch info, and live count overlay
+  - Annotated .mp4 with bounding boxes, zone lines, stitch info, ID lists, and live count overlay
   - .csv with per-frame tracking details including stitch remapping
   - Entry in the run's _summary/ JSON + CSV
 """
@@ -22,19 +19,15 @@ from __future__ import annotations
 from collections import defaultdict, Counter
 from pathlib import Path
 
+import csv
 import cv2
-import numpy as np
 from ultralytics import YOLO
 
 from .base import Evaluator
 from ..reporting.summary import MetricsSummary
 
-
-# ── Zone algorithm constants ─────────────────────────────────────────────────
-ENTRY_MARGIN = 0.20
-EXIT_MARGIN = 0.10
-ABSENT_THRESHOLD = 5
-MIN_TRACK_LENGTH = 5
+# Path to custom tracker config (relative to project root)
+TRACKER_CONFIG = "my_botsort.yaml"
 
 # ── Stitching parameters ─────────────────────────────────────────────────────
 REID_MAX_GAP = 90
@@ -50,24 +43,36 @@ NOISE_MAX_LEN = 2
 NOISE_GC_AFTER = 10
 
 
-def _get_zone(cx: float, frame_width: int, margin_ratio: float = ENTRY_MARGIN) -> str:
-    if cx < frame_width * margin_ratio:
+def _get_zone(cx: float, frame_width: int, entry_margin: float) -> str:
+    if cx < frame_width * entry_margin:
         return "left"
-    elif cx > frame_width * (1 - margin_ratio):
+    elif cx > frame_width * (1 - entry_margin):
         return "right"
     return "middle"
 
 
-def _is_valid_traversal(track: dict, frame_width: int) -> bool:
+def _is_valid_traversal(track: dict, frame_width: int, exit_margin: float,
+                        min_track_length: int, min_dist_px: float = 0.0,
+                        min_det_ratio: float = 0.0) -> bool:
     track_length = track["last_frame"] - track["first_frame"]
-    if track_length < MIN_TRACK_LENGTH:
+    if track_length < min_track_length:
         return False
+    # Detection ratio: frames detected / total span
+    if min_det_ratio > 0 and track_length > 0:
+        ratio = len(track["positions"]) / (track_length + 1)
+        if ratio < min_det_ratio:
+            return False
+    # Adaptive distance check
+    if min_dist_px > 0:
+        displacement = abs(track["positions"][-1][0] - track["positions"][0][0])
+        if displacement < min_dist_px:
+            return False
     first_side = track["first_side"]
     last_side = track["last_side"]
     final_x = track["positions"][-1][0]
-    if first_side == "left" and last_side == "right" and final_x > frame_width * (1 - EXIT_MARGIN):
+    if first_side == "left" and last_side == "right" and final_x > frame_width * (1 - exit_margin):
         return True
-    if first_side == "right" and last_side == "left" and final_x < frame_width * EXIT_MARGIN:
+    if first_side == "right" and last_side == "left" and final_x < frame_width * exit_margin:
         return True
     return False
 
@@ -114,7 +119,7 @@ def _try_stitch(
         dx = nx - ox
 
         if len(t["positions"]) >= REID_MIN_OLD_LEN:
-            vx, vy = _estimate_velocity(t["positions"])
+            vx, _ = _estimate_velocity(t["positions"])
             if vx == 0 or vx * dx <= 0:
                 continue
             predicted_x = ox + vx * gap
@@ -149,6 +154,21 @@ def _merge_tracks(old_tid: int, new_tid: int, tracks: dict, id_remap: dict):
         old["status"] = "tracking"
     del tracks[new_tid]
     id_remap[new_tid] = old_tid
+
+
+def _draw_id_list(frame, label: str, id_list, x: int, y_start: int,
+                  color: tuple, max_per_line: int = 20, scale: float = 0.5) -> int:
+    """Draw a labeled list of IDs on the frame. Returns the next y position."""
+    y = y_start
+    for i in range(0, max(1, len(id_list)), max_per_line):
+        chunk = ", ".join(map(str, sorted(id_list)[i:i + max_per_line]))
+        if i == 0:
+            text = f"{label}: {chunk}" if chunk else f"{label}: (none)"
+        else:
+            text = chunk
+        cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1)
+        y += int(22 * scale / 0.5)
+    return y + 10
 
 
 class StitchCountingEvaluator(Evaluator):
@@ -227,13 +247,40 @@ class StitchCountingEvaluator(Evaluator):
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         vid_writer = cv2.VideoWriter(str(out_video_path), fourcc, fps, (width, height))
 
-        import csv
         csv_file = open(out_csv_path, "w", newline="")
         csv_writer = csv.writer(csv_file)
         csv_writer.writerow([
             "frame_id", "track_id", "raw_track_id", "class_name", "confidence",
             "center_x", "center_y", "status", "track_info",
         ])
+
+        # ── Read margins from config ──
+        entry_margin = self.config.zone_entry_margin
+        exit_margin = self.config.zone_exit_margin
+        absent_threshold = self.config.zone_absent_threshold
+        min_track_length = self.config.zone_min_track_length
+
+        # Scale text size based on resolution
+        font_scale = max(0.35, min(0.6, width / 1280))
+        count_scale = max(0.5, min(0.8, width / 960))
+
+        # Adaptive thresholds
+        min_track_time = self.config.min_track_time
+        min_track_dist = self.config.min_track_distance
+        if min_track_time > 0 and fps > 0:
+            min_track_length = max(1, int(min_track_time * fps))
+            print(f"  Adaptive min_track_length: {min_track_length} frames "
+                  f"(from min_track_time={min_track_time}s at {fps:.1f}fps)")
+        min_dist_px = min_track_dist * width if min_track_dist > 0 else 0.0
+        if min_dist_px > 0:
+            print(f"  Adaptive min_track_distance: {min_dist_px:.0f}px "
+                  f"(from min_track_distance={min_track_dist} * {width}px)")
+        min_det_ratio = self.config.min_detection_ratio
+        if min_det_ratio > 0:
+            print(f"  Adaptive min_detection_ratio: {min_det_ratio:.0%}")
+
+        print(f"  Stitch params: entry_margin={entry_margin}, exit_margin={exit_margin}, "
+              f"absent_threshold={absent_threshold}, min_track_length={min_track_length}")
 
         # ── Tracking state ──
         tracks: dict[int, dict] = {}
@@ -255,6 +302,7 @@ class StitchCountingEvaluator(Evaluator):
 
             results = model.track(
                 frame, persist=True,
+                tracker=TRACKER_CONFIG,
                 imgsz=self.config.imgsz,
                 conf=self.config.conf,
                 max_det=self.config.max_det,
@@ -273,7 +321,7 @@ class StitchCountingEvaluator(Evaluator):
 
                 for (x_c, y_c, w, h), raw_tid, conf, cid in zip(xywh, ids, confidences, class_ids):
                     cname = model.names[cid]
-                    current_side = _get_zone(x_c, width)
+                    current_side = _get_zone(x_c, width, entry_margin)
                     tid = id_remap.get(raw_tid, raw_tid)
 
                     if tid not in tracks:
@@ -313,25 +361,32 @@ class StitchCountingEvaluator(Evaluator):
                     x2, y2 = int(x_c + w / 2), int(y_c + h / 2)
                     cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), box_color, 2)
 
+                    # Show stitch info in label (matching notebook)
                     if raw_tid != tid:
                         label = f"ID:{tid}(<-{raw_tid}) {cname} {conf:.2f}"
                     else:
                         label = f"ID:{tid} {cname} {conf:.2f}"
                     cv2.putText(annotated_frame, label,
-                                (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, box_color, 2)
+                                (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, font_scale, box_color, 1)
 
                     # Real-time counting check
-                    if tid not in counted_ids and _is_valid_traversal(track, width):
+                    if tid not in counted_ids and _is_valid_traversal(track, width, exit_margin, min_track_length, min_dist_px, min_det_ratio):
                         final_class = _decide_track_class(track["class_history"])
                         fish_counts[final_class] += 1
                         counted_ids.add(tid)
                         track["status"] = f"counted_{final_class}"
 
-                    # CSV row
+                    # CSV row (full track_info like notebook)
+                    track_info = (
+                        f"first_frame={track['first_frame']} "
+                        f"last_frame={track['last_frame']} "
+                        f"first_side={track['first_side']} "
+                        f"last_side={track['last_side']} "
+                        f"absent_frames={track['absent_frames']}"
+                    )
                     csv_writer.writerow([
                         frame_id, tid, raw_tid, cname, f"{conf:.3f}",
-                        f"{x_c:.2f}", f"{y_c:.2f}", track["status"],
-                        f"first_side={track['first_side']} last_side={track['last_side']}",
+                        f"{x_c:.2f}", f"{y_c:.2f}", track["status"], track_info,
                     ])
 
             # Update absent counters + noise GC
@@ -339,7 +394,7 @@ class StitchCountingEvaluator(Evaluator):
             for missing_tid, track in tracks.items():
                 if missing_tid not in current_frame_ids and missing_tid not in counted_ids:
                     track["absent_frames"] += 1
-                    if track["absent_frames"] >= ABSENT_THRESHOLD:
+                    if track["absent_frames"] >= absent_threshold:
                         track["status"] = "missing"
                     if (len(track["positions"]) <= NOISE_MAX_LEN
                             and track["absent_frames"] >= NOISE_GC_AFTER):
@@ -353,18 +408,42 @@ class StitchCountingEvaluator(Evaluator):
                     if canonical in stale_set or raw in stale_set:
                         del id_remap[raw]
 
-            # Draw zone lines + counts
-            left_line = int(width * ENTRY_MARGIN)
-            right_line = int(width * (1 - ENTRY_MARGIN))
+            # ── Draw zone boundaries ──
+            left_line = int(width * entry_margin)
+            right_line = int(width * (1 - entry_margin))
             cv2.line(annotated_frame, (left_line, 0), (left_line, height), (255, 255, 0), 2)
             cv2.line(annotated_frame, (right_line, 0), (right_line, height), (255, 255, 0), 2)
 
+            # ── Draw ID lists (top-left, matching notebook) ──
+            y_pos = _draw_id_list(annotated_frame, "Counted IDs", counted_ids,
+                                  10, 30, (0, 255, 255), scale=font_scale)
+
+            entered_list = [
+                tid for tid in tracks
+                if tracks[tid]["status"] == "tracking"
+                and len(tracks[tid]["positions"]) >= min_track_length
+            ]
+            y_pos = _draw_id_list(annotated_frame, "Entered IDs", entered_list,
+                                  10, y_pos, (255, 255, 0), scale=font_scale)
+
+            missing_list = [
+                tid for tid in tracks
+                if tracks[tid]["status"] == "missing"
+                and len(tracks[tid]["positions"]) >= min_track_length
+            ]
+            _draw_id_list(annotated_frame, "Missing IDs", missing_list,
+                          10, y_pos, (0, 0, 255), scale=font_scale)
+
+            # ── Draw counts (top-right, adaptive positioning) ──
             herring_count = fish_counts.get("Herring", 0)
             non_herring_count = sum(c for n, c in fish_counts.items() if n != "Herring")
+            count_x = max(10, width - int(300 * count_scale / 0.8))
             cv2.putText(annotated_frame, f"Herring: {herring_count} | Frame: {frame_id}",
-                        (width - 350, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-            cv2.putText(annotated_frame, f"Non-herring: {non_herring_count} | Stitches: {total_stitches}",
-                        (width - 350, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                        (count_x, 30), cv2.FONT_HERSHEY_SIMPLEX, count_scale, (0, 255, 0), 2)
+            cv2.putText(annotated_frame, f"Non-herring: {non_herring_count}",
+                        (count_x, 60), cv2.FONT_HERSHEY_SIMPLEX, count_scale, (0, 255, 0), 2)
+            cv2.putText(annotated_frame, f"Stitches: {total_stitches}",
+                        (count_x, 90), cv2.FONT_HERSHEY_SIMPLEX, count_scale, (0, 255, 0), 2)
 
             vid_writer.write(annotated_frame)
 
@@ -380,5 +459,29 @@ class StitchCountingEvaluator(Evaluator):
         vid_writer.release()
         csv_file.close()
         cv2.destroyAllWindows()
+
+        # ── Diagnostic summary ──
+        total_tracks = len(tracks) + len(counted_ids)
+        middle_entry = sum(1 for t in tracks.values() if t["first_side"] == "middle")
+        same_side = sum(1 for tid, t in tracks.items()
+                        if t["first_side"] == t["last_side"]
+                        and t["first_side"] != "middle"
+                        and tid not in counted_ids)
+        too_short = sum(1 for t in tracks.values()
+                        if (t["last_frame"] - t["first_frame"]) < min_track_length)
+        no_exit = sum(1 for tid, t in tracks.items()
+                      if t["first_side"] != t["last_side"]
+                      and t["first_side"] != "middle"
+                      and tid not in counted_ids
+                      and not _is_valid_traversal(t, width, exit_margin, min_track_length, min_dist_px, min_det_ratio))
+
+        print(f"\n  ── Stitch Diagnostics ──")
+        print(f"  Total unique tracks seen: {total_tracks}")
+        print(f"  Counted (valid traversal): {len(counted_ids)}")
+        print(f"  Stitches performed: {total_stitches}")
+        print(f"  Rejected — entered from middle: {middle_entry}")
+        print(f"  Rejected — exited same side as entry: {same_side}")
+        print(f"  Rejected — track too short (<{min_track_length} frames): {too_short}")
+        print(f"  Rejected — crossed sides but didn't reach exit boundary: {no_exit}")
 
         return dict(fish_counts), total_stitches
