@@ -41,6 +41,11 @@ class RunConfig:
     no_display: bool = False
     count_algorithm: str = "original"  # "original" | "zone" | "stitch" | "all"
 
+    # --- adaptive track filtering (applies to ALL algorithms) ---
+    min_track_time: float = 0.0       # seconds; 0 = disabled, use frame-count fallback
+    min_track_distance: float = 0.0   # fraction of frame width; 0 = disabled
+    min_detection_ratio: float = 0.0  # 0-1; min fraction of frames with high-conf detection; 0 = disabled
+
     # --- zone/stitch algorithm-specific (does NOT affect original) ---
     zone_entry_margin: float = 0.20
     zone_exit_margin: float = 0.10
@@ -103,6 +108,9 @@ class RunConfig:
             ),
             no_display=getattr(args, "no_display", False),
             count_algorithm=getattr(args, "algorithm", "original") or "original",
+            min_track_time=float(dataset_entry.get("min_track_time", 0.0)),
+            min_track_distance=float(dataset_entry.get("min_track_distance", 0.0)),
+            min_detection_ratio=float(dataset_entry.get("min_detection_ratio", 0.0)),
             zone_entry_margin=float(dataset_entry.get("zone_entry_margin", 0.20)),
             zone_exit_margin=float(dataset_entry.get("zone_exit_margin", 0.10)),
             zone_absent_threshold=int(dataset_entry.get("zone_absent_threshold", 5)),

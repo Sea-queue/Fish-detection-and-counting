@@ -124,6 +124,7 @@ class CountingEvaluator(Evaluator):
         track_history    = defaultdict(list)   # (x,y) trajectory for drawing
         track_predictions = defaultdict(list)  # high-conf class names per track
         track_positions  = defaultdict(list)   # x-center history per track
+        track_total_frames = defaultdict(int)  # total frames each track was seen (any conf)
         processed_ids    = set()               # tracks that have been finalized
         class_names      = None
         classwise_counts: dict[str, set] = defaultdict(set)  # class → set of track_ids
@@ -132,6 +133,26 @@ class CountingEvaluator(Evaluator):
         count_conf     = self.config.count_conf
         majority_ratio = self.config.majority_ratio
         min_track_len  = self.config.min_track_len
+
+        # Adaptive thresholds: compute frame-based equivalents from time/distance
+        min_track_time = self.config.min_track_time
+        min_track_dist = self.config.min_track_distance
+        if min_track_time > 0 and fps > 0:
+            adaptive_len = max(1, int(min_track_time * fps))
+            print(f"  Adaptive min_track_len: {adaptive_len} frames "
+                  f"(from min_track_time={min_track_time}s at {fps:.1f}fps)")
+            min_track_len = adaptive_len
+        if min_track_dist > 0:
+            min_dist_px = min_track_dist * width
+            print(f"  Adaptive min_track_distance: {min_dist_px:.0f}px "
+                  f"(from min_track_distance={min_track_dist} * {width}px)")
+        else:
+            min_dist_px = 0.0
+
+        min_det_ratio = self.config.min_detection_ratio
+        if min_det_ratio > 0:
+            print(f"  Adaptive min_detection_ratio: {min_det_ratio:.0%} "
+                  f"(track must be detected in {min_det_ratio:.0%} of frames present)")
 
         frame_id = -1
 
@@ -176,10 +197,11 @@ class CountingEvaluator(Evaluator):
             fh, fw = annotated.shape[:2]
             exit_px = int(fw * exit_margin)
 
-            # --- Accumulate history for high-confidence detections ---
+            # --- Accumulate history for all detections ---
             for (x_c, y_c, w, h), tid, conf, cid in zip(
                 xywh, track_ids, confs, class_ids
             ):
+                track_total_frames[tid] += 1
                 if conf >= count_conf:
                     track_predictions[tid].append(class_names[cid])
                     track_positions[tid].append(x_c)
@@ -187,6 +209,17 @@ class CountingEvaluator(Evaluator):
             # --- Check exit and finalise counts ---
             for tid, pos_hist in list(track_positions.items()):
                 if tid in processed_ids or len(pos_hist) < min_track_len:
+                    continue
+
+                # Detection ratio filter: high-conf frames / total frames present
+                if min_det_ratio > 0 and track_total_frames[tid] > 0:
+                    ratio = len(pos_hist) / track_total_frames[tid]
+                    if ratio < min_det_ratio:
+                        continue
+
+                # Adaptive distance filter: skip if displacement too small
+                displacement = abs(pos_hist[-1] - pos_hist[0])
+                if min_dist_px > 0 and displacement < min_dist_px:
                     continue
 
                 direction = pos_hist[-1] - pos_hist[0]

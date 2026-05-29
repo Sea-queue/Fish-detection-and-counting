@@ -51,10 +51,22 @@ def _get_zone(cx: float, frame_width: int, entry_margin: float) -> str:
     return "middle"
 
 
-def _is_valid_traversal(track: dict, frame_width: int, exit_margin: float, min_track_length: int) -> bool:
+def _is_valid_traversal(track: dict, frame_width: int, exit_margin: float,
+                        min_track_length: int, min_dist_px: float = 0.0,
+                        min_det_ratio: float = 0.0) -> bool:
     track_length = track["last_frame"] - track["first_frame"]
     if track_length < min_track_length:
         return False
+    # Detection ratio: frames detected / total span
+    if min_det_ratio > 0 and track_length > 0:
+        ratio = len(track["positions"]) / (track_length + 1)
+        if ratio < min_det_ratio:
+            return False
+    # Adaptive distance check
+    if min_dist_px > 0:
+        displacement = abs(track["positions"][-1][0] - track["positions"][0][0])
+        if displacement < min_dist_px:
+            return False
     first_side = track["first_side"]
     last_side = track["last_side"]
     final_x = track["positions"][-1][0]
@@ -252,6 +264,21 @@ class StitchCountingEvaluator(Evaluator):
         font_scale = max(0.35, min(0.6, width / 1280))
         count_scale = max(0.5, min(0.8, width / 960))
 
+        # Adaptive thresholds
+        min_track_time = self.config.min_track_time
+        min_track_dist = self.config.min_track_distance
+        if min_track_time > 0 and fps > 0:
+            min_track_length = max(1, int(min_track_time * fps))
+            print(f"  Adaptive min_track_length: {min_track_length} frames "
+                  f"(from min_track_time={min_track_time}s at {fps:.1f}fps)")
+        min_dist_px = min_track_dist * width if min_track_dist > 0 else 0.0
+        if min_dist_px > 0:
+            print(f"  Adaptive min_track_distance: {min_dist_px:.0f}px "
+                  f"(from min_track_distance={min_track_dist} * {width}px)")
+        min_det_ratio = self.config.min_detection_ratio
+        if min_det_ratio > 0:
+            print(f"  Adaptive min_detection_ratio: {min_det_ratio:.0%}")
+
         print(f"  Stitch params: entry_margin={entry_margin}, exit_margin={exit_margin}, "
               f"absent_threshold={absent_threshold}, min_track_length={min_track_length}")
 
@@ -343,7 +370,7 @@ class StitchCountingEvaluator(Evaluator):
                                 (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, font_scale, box_color, 1)
 
                     # Real-time counting check
-                    if tid not in counted_ids and _is_valid_traversal(track, width, exit_margin, min_track_length):
+                    if tid not in counted_ids and _is_valid_traversal(track, width, exit_margin, min_track_length, min_dist_px, min_det_ratio):
                         final_class = _decide_track_class(track["class_history"])
                         fish_counts[final_class] += 1
                         counted_ids.add(tid)
@@ -446,7 +473,7 @@ class StitchCountingEvaluator(Evaluator):
                       if t["first_side"] != t["last_side"]
                       and t["first_side"] != "middle"
                       and tid not in counted_ids
-                      and not _is_valid_traversal(t, width, exit_margin, min_track_length))
+                      and not _is_valid_traversal(t, width, exit_margin, min_track_length, min_dist_px, min_det_ratio))
 
         print(f"\n  ── Stitch Diagnostics ──")
         print(f"  Total unique tracks seen: {total_tracks}")
